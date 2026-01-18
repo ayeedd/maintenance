@@ -2,14 +2,14 @@ name: Maintenance
 
 on:
   schedule:
-    - cron: "0 16 18 * *"   
+    - cron: "0 16 * * 0"   # Weekly: Sunday 7:00 PM KSA (UTC+3)
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  maintenance:
+  update:
     runs-on: ubuntu-latest
 
     steps:
@@ -18,54 +18,22 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Snapshot (retain last 3)
+      - name: Safe update (add/modify only)
         run: |
-          TS=$(date +%Y%m%d-%H%M)
-          git branch snapshot-$TS
-          git push origin snapshot-$TS
-
-          OLD=$(git branch | grep snapshot- | sed 's/* //g' | sort | head -n -3)
-          for b in $OLD; do
-            git branch -D "$b" || true
-            git push origin --delete "$b" || true
-          done
-
-      - name: Update
-        run: |
+          # Use the original source as upstream (same URL used during Import)
           git remote add upstream "$(git remote get-url origin)" || true
           git fetch upstream || true
 
+          # Switch to main (or master)
           git checkout main || git checkout master
+
+          # Merge updates without committing deletions
           git merge upstream/$(git branch --show-current) --no-commit || true
 
-          # protect from deletions
+          # Revert any deletions (protect local files)
           git restore --staged .
           git checkout -- .
 
+          # Commit only if there are changes
           git commit -m "chore: maintenance" || true
           git push origin HEAD
-
-      - name: Summary & notify
-        continue-on-error: true
-        run: |
-          LAST=$(git branch --list 'snapshot-*' --sort=-creatordate | sed -n '1p')
-
-          if [ -n "$LAST" ]; then
-            A=$(git diff --name-status "$LAST" HEAD | awk '$1=="A"{c++} END{print c+0}')
-            M=$(git diff --name-status "$LAST" HEAD | awk '$1=="M"{c++} END{print c+0}')
-          else
-            A=0; M=0
-          fi
-
-          TOTAL=$((A + M))
-
-          echo "Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- Added: $A" >> $GITHUB_STEP_SUMMARY
-          echo "- Modified: $M" >> $GITHUB_STEP_SUMMARY
-          echo "- Deleted: 0 (protected)" >> $GITHUB_STEP_SUMMARY
-
-          # App notification (guaranteed) when there is any change
-          if [ "$TOTAL" -gt 0 ]; then
-            echo "::error title=Maintenance::${TOTAL} files changed"
-            exit 1
-          fi
