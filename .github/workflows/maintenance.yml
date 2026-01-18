@@ -1,0 +1,4 @@
+on:
+  schedule:
+    - cron: "0 16 18 * *"  # يوم 18 الساعة 7 مساء KSA (UTC+3)
+  workflow_dispatch:
