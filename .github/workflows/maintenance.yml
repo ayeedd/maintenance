@@ -36,7 +36,7 @@ jobs:
 
       - name: Fetch upstream updates safely (no deletions)
         run: |
-          # إذا لم يكن هناك upstream، لا نفعل شيئًا
+          # إضافة upstream بشكل آمن (بدون ترمينال محلي)
           git remote add upstream "$(git remote get-url origin)" || true
           git fetch upstream || true
 
@@ -44,7 +44,7 @@ jobs:
           git checkout main || git checkout master
           git merge upstream/$(git branch --show-current) --no-commit || true
 
-          # حماية من الحذف: إعادة أي حذف
+          # حماية من الحذف
           git restore --staged .
           git checkout -- .
 
@@ -53,26 +53,31 @@ jobs:
 
       - name: Change summary & alerts
         run: |
-          # حساب مختصر التغييرات من آخر snapshot
-          LAST_SNAP=$(git tag --list 'snapshot-*' --sort=-creatordate | sed -n '1p')
-
           echo "### Update Summary" >> $GITHUB_STEP_SUMMARY
+
+          # احسب الفروقات من آخر Snapshot (إن وجد)
+          LAST_SNAP=$(git branch --list 'snapshot-*' --sort=-creatordate | sed -n '1p')
 
           if [ -n "$LAST_SNAP" ]; then
             A=$(git diff --name-status "$LAST_SNAP" HEAD | awk '$1=="A"{c++} END{print c+0}')
             M=$(git diff --name-status "$LAST_SNAP" HEAD | awk '$1=="M"{c++} END{print c+0}')
-            D=$(git diff --name-status "$LAST_SNAP" HEAD | awk '$1=="D"{c++} END{print c+0}')
           else
-            A=0; M=0; D=0
+            A=0; M=0
           fi
 
           echo "- Added: **$A**" >> $GITHUB_STEP_SUMMARY
           echo "- Modified: **$M**" >> $GITHUB_STEP_SUMMARY
           echo "- Deleted: **0** (protected)" >> $GITHUB_STEP_SUMMARY
 
-          # تنبيه تغيير كبير
-          LIMIT=20
           TOTAL=$((A + M))
+
+          # 🔔 تنبيه التطبيق (Warning) عند وجود أي تحديث
+          if [ "$TOTAL" -gt 0 ]; then
+            echo "::warning title=Maintenance Update::${TOTAL} files changed"
+          fi
+
+          # 🚨 تحذير تغيير كبير (اختياري)
+          LIMIT=20
           if [ "$TOTAL" -ge "$LIMIT" ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "## 🚨 LARGE UPDATE ALERT" >> $GITHUB_STEP_SUMMARY
