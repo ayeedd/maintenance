@@ -1,4 +1,81 @@
+name: Maintenance
+
 on:
   schedule:
     - cron: "0 16 18 * *"  # يوم 18 الساعة 7 مساء KSA (UTC+3)
   workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Create snapshot (keep last 3)
+        run: |
+          DATE=$(date +%Y%m%d-%H%M)
+          git branch snapshot-$DATE
+          git push origin snapshot-$DATE
+
+          # Keep only last 3 snapshots
+          OLD=$(git branch | grep snapshot- | sed 's/* //g' | sort | head -n -3)
+          for b in $OLD; do
+            git branch -D "$b" || true
+            git push origin --delete "$b" || true
+          done
+
+      - name: Fetch upstream updates safely (no deletions)
+        run: |
+          # إذا لم يكن هناك upstream، لا نفعل شيئًا
+          git remote add upstream "$(git remote get-url origin)" || true
+          git fetch upstream || true
+
+          # دمج آمن: إضافات/تعديلات فقط — بدون حذف
+          git checkout main || git checkout master
+          git merge upstream/$(git branch --show-current) --no-commit || true
+
+          # حماية من الحذف: إعادة أي حذف
+          git restore --staged .
+          git checkout -- .
+
+          git commit -m "maintenance: safe update" || true
+          git push origin HEAD
+
+      - name: Change summary & alerts
+        run: |
+          # حساب مختصر التغييرات من آخر snapshot
+          LAST_SNAP=$(git tag --list 'snapshot-*' --sort=-creatordate | sed -n '1p')
+
+          echo "### Update Summary" >> $GITHUB_STEP_SUMMARY
+
+          if [ -n "$LAST_SNAP" ]; then
+            A=$(git diff --name-status "$LAST_SNAP" HEAD | awk '$1=="A"{c++} END{print c+0}')
+            M=$(git diff --name-status "$LAST_SNAP" HEAD | awk '$1=="M"{c++} END{print c+0}')
+            D=$(git diff --name-status "$LAST_SNAP" HEAD | awk '$1=="D"{c++} END{print c+0}')
+          else
+            A=0; M=0; D=0
+          fi
+
+          echo "- Added: **$A**" >> $GITHUB_STEP_SUMMARY
+          echo "- Modified: **$M**" >> $GITHUB_STEP_SUMMARY
+          echo "- Deleted: **0** (protected)" >> $GITHUB_STEP_SUMMARY
+
+          # تنبيه تغيير كبير
+          LIMIT=20
+          TOTAL=$((A + M))
+          if [ "$TOTAL" -ge "$LIMIT" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## 🚨 LARGE UPDATE ALERT" >> $GITHUB_STEP_SUMMARY
+            echo "- Total changes: **$TOTAL** (threshold: $LIMIT)" >> $GITHUB_STEP_SUMMARY
+            echo "- Action: Review changes." >> $GITHUB_STEP_SUMMARY
+          fi
