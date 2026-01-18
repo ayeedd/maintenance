@@ -2,7 +2,7 @@ name: Maintenance
 
 on:
   schedule:
-    - cron: "0 16 18 * *"  # يوم 18 الساعة 7 مساء KSA (UTC+3)
+    - cron: "0 16 18 * *"   # Monthly on day 18 at 16:00 UTC
   workflow_dispatch:
 
 permissions:
@@ -13,74 +13,59 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Create snapshot (keep last 3)
+      - name: Snapshot (retain last 3)
         run: |
-          DATE=$(date +%Y%m%d-%H%M)
-          git branch snapshot-$DATE
-          git push origin snapshot-$DATE
+          TS=$(date +%Y%m%d-%H%M)
+          git branch snapshot-$TS
+          git push origin snapshot-$TS
 
-          # Keep only last 3 snapshots
           OLD=$(git branch | grep snapshot- | sed 's/* //g' | sort | head -n -3)
           for b in $OLD; do
             git branch -D "$b" || true
             git push origin --delete "$b" || true
           done
 
-      - name: Fetch upstream updates safely (no deletions)
+      - name: Update
         run: |
-          # إضافة upstream بشكل آمن (بدون ترمينال محلي)
           git remote add upstream "$(git remote get-url origin)" || true
           git fetch upstream || true
 
-          # دمج آمن: إضافات/تعديلات فقط — بدون حذف
           git checkout main || git checkout master
           git merge upstream/$(git branch --show-current) --no-commit || true
 
-          # حماية من الحذف
+          # protect from deletions
           git restore --staged .
           git checkout -- .
 
-          git commit -m "maintenance: safe update" || true
+          git commit -m "chore: maintenance" || true
           git push origin HEAD
 
-      - name: Change summary & alerts
+      - name: Summary & notify
+        continue-on-error: true
         run: |
-          echo "### Update Summary" >> $GITHUB_STEP_SUMMARY
+          LAST=$(git branch --list 'snapshot-*' --sort=-creatordate | sed -n '1p')
 
-          # احسب الفروقات من آخر Snapshot (إن وجد)
-          LAST_SNAP=$(git branch --list 'snapshot-*' --sort=-creatordate | sed -n '1p')
-
-          if [ -n "$LAST_SNAP" ]; then
-            A=$(git diff --name-status "$LAST_SNAP" HEAD | awk '$1=="A"{c++} END{print c+0}')
-            M=$(git diff --name-status "$LAST_SNAP" HEAD | awk '$1=="M"{c++} END{print c+0}')
+          if [ -n "$LAST" ]; then
+            A=$(git diff --name-status "$LAST" HEAD | awk '$1=="A"{c++} END{print c+0}')
+            M=$(git diff --name-status "$LAST" HEAD | awk '$1=="M"{c++} END{print c+0}')
           else
             A=0; M=0
           fi
 
-          echo "- Added: **$A**" >> $GITHUB_STEP_SUMMARY
-          echo "- Modified: **$M**" >> $GITHUB_STEP_SUMMARY
-          echo "- Deleted: **0** (protected)" >> $GITHUB_STEP_SUMMARY
-
           TOTAL=$((A + M))
 
-          # 🔔 تنبيه التطبيق (Warning) عند وجود أي تحديث
-          if [ "$TOTAL" -gt 0 ]; then
-            echo "::warning title=Maintenance Update::${TOTAL} files changed"
-          fi
+          echo "Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Added: $A" >> $GITHUB_STEP_SUMMARY
+          echo "- Modified: $M" >> $GITHUB_STEP_SUMMARY
+          echo "- Deleted: 0 (protected)" >> $GITHUB_STEP_SUMMARY
 
-          # 🚨 تحذير تغيير كبير (اختياري)
-          LIMIT=20
-          if [ "$TOTAL" -ge "$LIMIT" ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## 🚨 LARGE UPDATE ALERT" >> $GITHUB_STEP_SUMMARY
-            echo "- Total changes: **$TOTAL** (threshold: $LIMIT)" >> $GITHUB_STEP_SUMMARY
-            echo "- Action: Review changes." >> $GITHUB_STEP_SUMMARY
+          # App notification (guaranteed) when there is any change
+          if [ "$TOTAL" -gt 0 ]; then
+            echo "::error title=Maintenance::${TOTAL} files changed"
+            exit 1
           fi
