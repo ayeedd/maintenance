@@ -2,7 +2,7 @@ name: Maintenance
 
 on:
   schedule:
-    - cron: "0 16 * * 0"   # Weekly: Sunday 7:00 PM KSA (UTC+3)
+    - cron: "0 16 * * 0"   # Sunday 7:00 PM KSA
   workflow_dispatch:
 
 permissions:
@@ -18,22 +18,27 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Safe update (add/modify only)
+      - name: Configure upstream
         run: |
-          # Use the original source as upstream (same URL used during Import)
-          git remote add upstream "$(git remote get-url origin)" || true
-          git fetch upstream || true
+          # ⚠️ ضع رابط المستودع الأصلي هنا (المصدر)
+          git remote add upstream https://github.com/ORIGINAL_OWNER/ORIGINAL_REPO.git || true
+          git fetch upstream
 
-          # Switch to main (or master)
-          git checkout main || git checkout master
+      - name: Update safely (add & modify only)
+        run: |
+          git checkout main
 
-          # Merge updates without committing deletions
-          git merge upstream/$(git branch --show-current) --no-commit || true
+          # جلب الفرق بدون تطبيق مباشر
+          git diff --name-status HEAD upstream/main > /tmp/diff.txt
 
-          # Revert any deletions (protect local files)
-          git restore --staged .
-          git checkout -- .
- 
-          # Commit only if there are changes
-          git commit -m "chore: maintenance" || true
-          git push origin HEAD
+          # تطبيق الإضافات والتعديلات فقط
+          awk '$1 != "D" { print $2 }' /tmp/diff.txt | xargs -r git checkout upstream/main --
+
+          # تأكيد وجود تغييرات
+          if git status --porcelain | grep .; then
+            git add .
+            git commit -m "chore: maintenance update"
+            git push origin main
+          else
+            echo "No changes to apply"
+          fi
